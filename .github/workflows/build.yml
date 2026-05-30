@@ -1,0 +1,78 @@
+name: Build executables
+
+# Запускается:
+#   - при публикации релиза  -> бинарники прикрепляются к релизу как assets
+#   - вручную из вкладки Actions -> бинарники сохраняются как artifacts (90 дней)
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write  # нужно для прикрепления assets к релизу
+
+# Форсим Node 24 для всех JavaScript-actions (checkout, setup-python,
+# upload-artifact и т.п.) независимо от их собственной декларации.
+# Убирает предупреждения «Node.js 20 actions are deprecated» до тех пор,
+# пока GitHub не выпустит обновлённые версии этих экшнов.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset_name: MarkovBot-linux
+            built_path: dist/MarkovBot
+          - os: windows-latest
+            asset_name: MarkovBot-windows.exe
+            built_path: dist/MarkovBot.exe
+          - os: macos-latest
+            asset_name: MarkovBot-macos
+            built_path: dist/MarkovBot
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build executable with PyInstaller
+        run: pyinstaller MarkovBot.spec --noconfirm --clean
+
+      - name: Rename binary to platform-specific name
+        shell: bash
+        run: mv "${{ matrix.built_path }}" "${{ matrix.asset_name }}"
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "${{ matrix.asset_name }}" --clobber --repo "${{ github.repository }}"
+
+      - name: Upload as workflow artifact (manual runs)
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
+          retention-days: 90
